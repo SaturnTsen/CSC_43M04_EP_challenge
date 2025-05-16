@@ -37,3 +37,10 @@ class MSLELoss(nn.Module):
         loss = torch.mean((log_pred - log_true) ** 2)
 
         return loss
+
+class MSELoss(nn.Module):
+    def __init__(self):
+        super(MSELoss, self).__init__()
+
+    def forward(self, y_pred, y_true):
+        return torch.mean((y_pred - y_true) ** 2)

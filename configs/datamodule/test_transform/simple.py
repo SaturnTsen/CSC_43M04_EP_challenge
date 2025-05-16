@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
 @dataclass
-class ValTransformConfig:
+class TestTransformConfig:
     _target_: str = "torchvision.transforms.Compose"
     transforms: List[Dict[str, Any]] = field(default_factory=lambda: [
         {"_target_": "torchvision.transforms.Resize", "size": [224, 224]},

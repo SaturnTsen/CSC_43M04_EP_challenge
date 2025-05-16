@@ -10,7 +10,8 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from hydra.core.config_store import ConfigStore
 
-from configs.cfg import TrainConfig
+from configs.experiments.base import BaseTrainConfig
+from configs.experiments.improved import ImprovedTrainConfig
 from data.datamodule import DataModule
 from utils.sanity import show_images
 
@@ -21,10 +22,11 @@ class BatchDict(TypedDict):
     target: torch.Tensor
 
 cs = ConfigStore.instance()
-cs.store(name="cfg", node=TrainConfig)
+cs.store(name="base", node=BaseTrainConfig)
+cs.store(name="improved", node=ImprovedTrainConfig)
 
-@hydra.main(config_path="configs", config_name="cfg", version_base="1.3")
-def train(cfg: TrainConfig) -> None:
+@hydra.main(config_path="configs", config_name=None, version_base="1.3")
+def train(cfg: BaseTrainConfig) -> None:
     logger = (
         wandb.init(project="challenge_CSC_43M04_EP", name=cfg.experiment_name)
         if cfg.log
