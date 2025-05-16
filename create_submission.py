@@ -2,12 +2,17 @@ import hydra
 from torch.utils.data import DataLoader
 import pandas as pd
 import torch
-
 from data.dataset import Dataset
+from omegaconf import DictConfig
+from hydra.core.config_store import ConfigStore
+from configs.cfg import TrainConfig
+
+cs = ConfigStore.instance()
+cs.store(name="cfg", node=TrainConfig)
 
 
-@hydra.main(config_path="configs", config_name="train")
-def create_submission(cfg):
+@hydra.main(config_path="configs", config_name="cfg", version_base="1.3")
+def create_submission(cfg: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_loader = DataLoader(
         Dataset(

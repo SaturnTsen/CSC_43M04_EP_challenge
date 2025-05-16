@@ -1,27 +1,47 @@
 import torch
 import wandb
 import hydra
+
 from tqdm import tqdm
+from typing import TypedDict, List
 
+from torch import nn
+from torch.optim import Optimizer
+from torch.utils.data import DataLoader
+from hydra.core.config_store import ConfigStore
 
+from configs.cfg import TrainConfig
+from data.datamodule import DataModule
 from utils.sanity import show_images
 
+class BatchDict(TypedDict):
+    id: List[str]
+    image: torch.Tensor
+    text: List[str]
+    target: torch.Tensor
 
-@hydra.main(config_path="configs", config_name="train")
-def train(cfg):
+cs = ConfigStore.instance()
+cs.store(name="cfg", node=TrainConfig)
+
+@hydra.main(config_path="configs", config_name="cfg", version_base="1.3")
+def train(cfg: TrainConfig) -> None:
     logger = (
         wandb.init(project="challenge_CSC_43M04_EP", name=cfg.experiment_name)
         if cfg.log
         else None
     )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = hydra.utils.instantiate(cfg.model.instance).to(device)
-    optimizer = hydra.utils.instantiate(cfg.optim, params=model.parameters())
-    loss_fn = hydra.utils.instantiate(cfg.loss_fn)
-    datamodule = hydra.utils.instantiate(cfg.datamodule)
-    train_loader = datamodule.train_dataloader()
-    val_loader = datamodule.val_dataloader()
-    train_sanity = show_images(train_loader, name="assets/sanity/train_images")
+    
+    device : torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model : nn.Module = hydra.utils.instantiate(cfg.model.instance).to(device)
+    
+    optimizer : Optimizer = hydra.utils.instantiate(cfg.optim, params=model.parameters())
+    loss_fn : nn.Module = hydra.utils.instantiate(cfg.loss_fn)
+    
+    datamodule : DataModule = hydra.utils.instantiate(cfg.datamodule)
+    train_loader : DataLoader = datamodule.train_dataloader()
+    val_loader : DataLoader = datamodule.val_dataloader()
+    
+    train_sanity : wandb.Image = show_images(train_loader, name="assets/sanity/train_images")
     (
         logger.log({"sanity_checks/train_images": wandb.Image(train_sanity)})
         if logger is not None
@@ -41,6 +61,7 @@ def train(cfg):
         num_samples_train = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
         for i, batch in enumerate(pbar):
+            batch: BatchDict = batch
             batch["image"] = batch["image"].to(device)
             batch["target"] = batch["target"].to(device).squeeze()
             preds = model(batch).squeeze()
@@ -75,6 +96,7 @@ def train(cfg):
         model.eval()
         if val_loader is not None: 
             for _, batch in enumerate(val_loader):
+                batch: BatchDict = batch
                 batch["image"] = batch["image"].to(device)
                 batch["target"] = batch["target"].to(device).squeeze()
                 with torch.no_grad():
