@@ -2,19 +2,10 @@ from dataclasses import dataclass, field
 from hydra.core.config_store import ConfigStore
 
 from configs.experiments.base import BaseTrainConfig
-from configs.model.dinov2_improved import ModelConfig
+from configs.model.dinov2_improved_standardized import ModelConfig
 from configs.optim.adamw import OptimizerConfig
-from configs.loss_fn.msle import LossFnConfig
-from configs.datamodule.default import DataModuleConfig
-
-# 修改DataModuleConfig以启用标准化
-@dataclass
-class StandardizedDataModuleConfig(DataModuleConfig):
-    # 启用目标变量标准化
-    standardize_target: bool = True
-    # log1p(views)的均值和标准差
-    target_mu: float = 10.50
-    target_sigma: float = 2.20
+from configs.loss_fn.mse import LossFnConfig
+from configs.datamodule.standardized import StandardizedDataModuleConfig
 
 @dataclass
 class StandardizedTrainConfig(BaseTrainConfig):

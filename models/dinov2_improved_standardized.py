@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import warnings
 
-class DinoV2Improved(nn.Module):
+class DinoV2ImprovedStandardized(nn.Module):
     def __init__(self, frozen=False, dropout_rate=0.3):
         super().__init__()
         # 加载预训练的DinoV2骨干网络
@@ -29,8 +29,7 @@ class DinoV2Improved(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout_rate),
             
-            nn.Linear(self.dim // 4, 1),
-            nn.ReLU()  # 确保输出为非负值
+            nn.Linear(self.dim // 4, 1)
         )
         
         # 初始化权重

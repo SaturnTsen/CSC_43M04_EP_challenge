@@ -23,3 +23,4 @@ class DataModuleConfig:
     num_workers: int = min(cpu_count(), 64)  # 根据CPU核心数设置，最大64
     seed: int = 42
     val_split: float = 0.1
+    standardize_target: bool = False

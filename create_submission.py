@@ -57,7 +57,7 @@ def create_submission(cfg: BaseTrainConfig):
             preds = preds.cpu().numpy()
         
             for id_, pred in zip(batch["id"], preds):
-                records.append({"ID": id_, "views": pred})
+                records.append({"ID": id_.item(), "views": pred})
 
     # - Create submission.csv
     submission = pd.DataFrame(records)
