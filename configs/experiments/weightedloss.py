@@ -4,13 +4,13 @@ from hydra.core.config_store import ConfigStore
 from configs.experiments.base import BaseTrainConfig
 from configs.model.dinov2_improved_standardized import ModelConfig
 from configs.optim.adamw import OptimizerConfig
-from configs.loss_fn.mse import LossFnConfig
+from configs.loss_fn.weighted_mse import LossFnConfig
 from configs.datamodule.standardized import StandardizedDataModuleConfig
 
 @dataclass
 class StandardizedTrainConfig(BaseTrainConfig):
     # 实验名称
-    experiment_name: str = "standardized_experiment"
+    experiment_name: str = "weighted_loss_experiment"
     # 模型配置
     model: ModelConfig = field(default_factory=ModelConfig)
     # 优化器配置
@@ -22,9 +22,9 @@ class StandardizedTrainConfig(BaseTrainConfig):
     # 训练轮数
     epochs: int = 30
     # 保存模型的路径
-    checkpoint_path: str = "checkpoints/standardized_model.pt"
+    checkpoint_path: str = "checkpoints/weighted_loss_model.pt"
     # 提交文件路径
-    submission_path: str = "submissions/standardized_submission.csv"
+    submission_path: str = "submissions/weighted_loss_submission.csv"
     # 是否记录到wandb
     log: bool = True 
     # MSLE验证频率（每多少个epoch进行一次MSLE验证，设为0表示不验证）
