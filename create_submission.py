@@ -8,6 +8,7 @@ import torch
 from data.dataset import Dataset
 from hydra.core.config_store import ConfigStore
 from configs.experiments.base import BaseTrainConfig
+from utils.transforms import TargetStandardizer
 
 @hydra.main(config_path="configs", config_name=None, version_base="1.3")
 def create_submission(cfg: BaseTrainConfig):
@@ -31,6 +32,15 @@ def create_submission(cfg: BaseTrainConfig):
     print(f"Loading model from checkpoint: {cfg.checkpoint_path}")
     model.load_state_dict(checkpoint)
     print("Model loaded")
+    
+    # - 创建标准化转换器 (如果启用)
+    target_standardizer = None
+    if hasattr(cfg.datamodule, 'standardize_target') and cfg.datamodule.standardize_target:
+        target_standardizer = TargetStandardizer(
+            mu=cfg.datamodule.target_mu,
+            sigma=cfg.datamodule.target_sigma
+        )
+        print(f"Using target standardizer: mu={cfg.datamodule.target_mu}, sigma={cfg.datamodule.target_sigma}")
 
     # - Create records
     records = []
@@ -38,10 +48,16 @@ def create_submission(cfg: BaseTrainConfig):
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             batch["image"] = batch["image"].to(device)
-            preds = model(batch).squeeze().cpu().numpy()
+            preds = model(batch).squeeze()
+            
+            # 如果使用标准化，将预测值转换回原始尺度
+            if target_standardizer:
+                preds = target_standardizer.unstandardize(preds)
+            
+            preds = preds.cpu().numpy()
         
             for id_, pred in zip(batch["id"], preds):
-                records.append({"ID": id_.item(), "views": pred})
+                records.append({"ID": id_, "views": pred})
 
     # - Create submission.csv
     submission = pd.DataFrame(records)

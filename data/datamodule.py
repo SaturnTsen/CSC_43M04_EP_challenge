@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader, random_split
 from typing import Optional, List, Any, TypedDict
 
 from data.dataset import Dataset
+from utils.transforms import TargetStandardizer
 
 class BatchDict(TypedDict):
     id: List[str]
@@ -21,6 +22,9 @@ class DataModule:
         seed: int,
         metadata: List[str] = ["title"],
         val_split: float = 0.1,
+        standardize_target: bool = False,
+        target_mu: float = 10.50,
+        target_sigma: float = 2.20,
     ):
         self.dataset_path = dataset_path
         self.train_transform = train_transform  
@@ -30,6 +34,12 @@ class DataModule:
         self.metadata = metadata
         self.val_split = val_split
         self.seed = seed
+        self.standardize_target = standardize_target
+        
+        # 如果启用目标标准化，创建标准化转换器
+        self.target_standardizer = None
+        if standardize_target:
+            self.target_standardizer = TargetStandardizer(mu=target_mu, sigma=target_sigma)
         
         # 初始化数据集
         self.train_val_dataset = Dataset(
@@ -51,6 +61,28 @@ class DataModule:
             generator=torch.Generator().manual_seed(self.seed)
         )
 
+    def standardize_batch(self, batch):
+        """应用目标变量标准化"""
+        if self.target_standardizer and self.standardize_target:
+            batch = self.target_standardizer.standardize(batch)
+        return batch
+
+    def collate_fn(self, batch):
+        """自定义批处理函数，用于应用目标标准化"""
+        # 将列表的字典转换为字典的列表
+        result = {}
+        for key in batch[0].keys():
+            if key == "image":
+                result[key] = torch.stack([item[key] for item in batch])
+            elif key == "target":
+                result[key] = torch.tensor([item[key] for item in batch])
+            else:
+                result[key] = [item[key] for item in batch]
+        
+        # 应用标准化
+        result = self.standardize_batch(result)
+        return result
+
     def train_dataloader(self) -> DataLoader:
         """训练数据加载器"""
         return DataLoader(
@@ -58,6 +90,7 @@ class DataModule:
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn if self.standardize_target else None,
         )
 
     def val_dataloader(self) -> Optional[DataLoader]:
@@ -70,6 +103,7 @@ class DataModule:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn if self.standardize_target else None,
         )
     
     def test_dataloader(self) -> DataLoader:
@@ -86,3 +120,11 @@ class DataModule:
             shuffle=False,
             num_workers=self.num_workers,
         )
+        
+    @property
+    def target_standardizer(self):
+        return self._target_standardizer
+        
+    @target_standardizer.setter
+    def target_standardizer(self, standardizer):
+        self._target_standardizer = standardizer

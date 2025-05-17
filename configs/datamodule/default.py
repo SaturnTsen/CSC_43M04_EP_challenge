@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Any, Optional
+from multiprocessing import cpu_count
 from configs.datamodule.train_transform.simple import TrainTransformConfig
 from configs.datamodule.test_transform.simple import TestTransformConfig
 
@@ -19,6 +20,6 @@ class DataModuleConfig:
     test_transform: TestTransformConfig = field(default_factory=TestTransformConfig)
     metadata: List[str] = field(default_factory=lambda: ["title"])
     batch_size: int = 128
-    num_workers: int = 64
+    num_workers: int = min(cpu_count(), 64)  # 根据CPU核心数设置，最大64
     seed: int = 42
     val_split: float = 0.1
