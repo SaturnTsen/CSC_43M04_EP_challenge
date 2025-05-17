@@ -97,6 +97,13 @@ def train(cfg: BaseTrainConfig) -> None:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
+            # 如果损失函数支持lambda scheduler，则更新lambda值
+            if hasattr(loss_fn, 'step'):
+                current_lambda = loss_fn.step()
+                if logger is not None and hasattr(loss_fn, 'get_current_lambda'):
+                    logger.log({"train/current_lambda": loss_fn.get_current_lambda()})
+                    
             epoch_train_loss += loss.detach().cpu().numpy() * len(batch["image"])
             num_samples_train += len(batch["image"])
             pbar.set_postfix({"train/loss_step": loss.detach().cpu().numpy()})
