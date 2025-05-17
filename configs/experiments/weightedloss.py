@@ -8,7 +8,7 @@ from configs.loss_fn.weighted_mse import LossFnConfig
 from configs.datamodule.standardized import StandardizedDataModuleConfig
 
 @dataclass
-class StandardizedTrainConfig(BaseTrainConfig):
+class WeightedlossTrainConfig(BaseTrainConfig):
     # 实验名称
     experiment_name: str = "weighted_loss_experiment"
     # 模型配置

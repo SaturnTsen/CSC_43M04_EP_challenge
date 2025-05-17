@@ -62,7 +62,7 @@ class WeightedStandardizedMSELoss(nn.Module):
     标准化回归下的加权 MSE，用于增强爆款（高 log1p(y)）样本惩罚。
     使用双阈值 sigmoid 平滑加权策略：13.5 启动，16.5 饱和。
     """
-    def __init__(self, mean, std, lambda_weight=2.0, lower=13.5, upper=16.5):
+    def __init__(self, mean, std, lambda_weight, lower, upper):
         super(WeightedStandardizedMSELoss, self).__init__()
         self.mean = mean
         self.std = std
