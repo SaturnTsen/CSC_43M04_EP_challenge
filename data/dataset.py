@@ -4,11 +4,11 @@ from PIL import Image
 
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, split, transforms, metadata):
+    def __init__(self, dataset_path, split, metadata, transforms=None):
         self.dataset_path = dataset_path
         self.split = split
         # - read the info csvs
-        print(f"{dataset_path}/{split}.csv")
+        print(f"Reading {dataset_path}/{split}.csv")
         info = pd.read_csv(f"{dataset_path}/{split}.csv")
         info["description"] = info["description"].fillna("")
         info["meta"] = info[metadata].agg(" + ".join, axis=1)
@@ -31,7 +31,8 @@ class Dataset(torch.utils.data.Dataset):
         image = Image.open(
             f"{self.dataset_path}/{self.split}/{self.ids[idx]}.jpg"
         ).convert("RGB")
-        image = self.transforms(image)
+        if self.transforms is not None:
+            image = self.transforms(image)
         value = {
             "id": self.ids[idx],
             "image": image,

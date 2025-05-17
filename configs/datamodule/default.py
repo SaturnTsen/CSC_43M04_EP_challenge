@@ -1,7 +1,15 @@
 from dataclasses import dataclass, field
-from typing import List, Any
+from typing import List, Any, Optional
 from configs.datamodule.train_transform.simple import TrainTransformConfig
 from configs.datamodule.test_transform.simple import TestTransformConfig
+
+@dataclass
+class DatasetConfig:
+    _target_: str = "data.dataset.Dataset"
+    dataset_path: str = "${data_dir}"
+    split: str = "train_val"
+    metadata: List[str] = field(default_factory=lambda: ["title"])
+    transforms: Any = None
 
 @dataclass
 class DataModuleConfig:
@@ -13,3 +21,4 @@ class DataModuleConfig:
     batch_size: int = 128
     num_workers: int = 64
     seed: int = 42
+    val_split: float = 0.1

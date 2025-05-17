@@ -44,3 +44,15 @@ class MSELoss(nn.Module):
 
     def forward(self, y_pred, y_true):
         return torch.mean((y_pred - y_true) ** 2)
+
+class StandardizedMSELoss(nn.Module):
+    """
+    标准化的MSE损失
+    模型输出标准化后的预测值，而不是直接预测原始值
+    """
+    def __init__(self):
+        super(StandardizedMSELoss, self).__init__()
+        self.mse = nn.MSELoss()
+
+    def forward(self, y_pred, y_true):
+        return self.mse(y_pred, y_true)

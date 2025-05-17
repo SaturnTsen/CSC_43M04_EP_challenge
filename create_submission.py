@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", message="xFormers is available")
+
 import hydra
 from torch.utils.data import DataLoader
 import pandas as pd

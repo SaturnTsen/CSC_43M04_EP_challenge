@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", message="xFormers is available")
+
 import torch
 import wandb
 import hydra

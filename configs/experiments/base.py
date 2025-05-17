@@ -3,7 +3,7 @@ from typing import List, Any
 from configs.model.dinov2 import ModelConfig
 from configs.optim.adamw import OptimizerConfig
 from configs.loss_fn.msle import LossFnConfig
-from configs.datamodule.default import DataModuleConfig
+from configs.datamodule.default import DataModuleConfig, DatasetConfig
 
 
 @dataclass
@@ -20,3 +20,4 @@ class BaseTrainConfig:
     optim: OptimizerConfig = field(default_factory=OptimizerConfig)
     loss_fn: LossFnConfig = field(default_factory=LossFnConfig)
     datamodule: DataModuleConfig = field(default_factory=DataModuleConfig) 
+    dataset: DatasetConfig = field(default_factory=DatasetConfig) # only used for explore.ipynb
