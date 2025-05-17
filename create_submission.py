@@ -3,16 +3,12 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import torch
 from data.dataset import Dataset
-from omegaconf import DictConfig
 from hydra.core.config_store import ConfigStore
-from configs.cfg import TrainConfig
+from configs.experiments.base import BaseTrainConfig
 
-cs = ConfigStore.instance()
-cs.store(name="cfg", node=TrainConfig)
-
-
-@hydra.main(config_path="configs", config_name="cfg", version_base="1.3")
-def create_submission(cfg: DictConfig):
+@hydra.main(config_path="configs", config_name=None, version_base="1.3")
+def create_submission(cfg: BaseTrainConfig):
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_loader = DataLoader(
         Dataset(
@@ -25,6 +21,7 @@ def create_submission(cfg: DictConfig):
         shuffle=False,
         num_workers=cfg.datamodule.num_workers,
     )
+    
     # - Load model and checkpoint
     model = hydra.utils.instantiate(cfg.model.instance).to(device)
     checkpoint = torch.load(cfg.checkpoint_path)
@@ -35,18 +32,41 @@ def create_submission(cfg: DictConfig):
     # - Create submission.csv
     submission = pd.DataFrame(columns=["ID", "views"])
 
-    for i, batch in enumerate(test_loader):
-        batch["image"] = batch["image"].to(device)
-        with torch.no_grad():
+    model.eval()
+    with torch.no_grad():
+        for i, batch in enumerate(test_loader):
+            batch["image"] = batch["image"].to(device)
             preds = model(batch).squeeze().cpu().numpy()
-        submission = pd.concat(
-            [
+            submission = pd.concat([
                 submission,
                 pd.DataFrame({"ID": batch["id"], "views": preds}),
-            ]
-        )
+            ])
     submission.to_csv(f"{cfg.root_dir}/submission.csv", index=False)
 
 
 if __name__ == "__main__":
+    import importlib
+    import sys
+    
+    # Get config-name from command line arguments
+    config_name = None
+    for arg in sys.argv:
+        if arg.startswith("--config-name="):
+            config_name = arg.split("=")[1]
+            break
+    
+    if config_name is None:
+        raise ValueError("Please use --config-name to specify the config name")
+    
+    # Dynamically import config class
+    try:
+        config_module = importlib.import_module(f"configs.experiments.{config_name}")
+        config_class = getattr(config_module, f"{config_name.capitalize()}TrainConfig")
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Cannot load config {config_name}: {str(e)}")
+    
+    # Register config
+    cs = ConfigStore.instance()
+    cs.store(name=config_name, node=config_class)
+    
     create_submission()

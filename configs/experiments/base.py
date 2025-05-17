@@ -5,6 +5,7 @@ from configs.optim.adamw import OptimizerConfig
 from configs.loss_fn.msle import LossFnConfig
 from configs.datamodule.default import DataModuleConfig
 
+
 @dataclass
 class BaseTrainConfig:
     epochs: int = 20
@@ -13,7 +14,7 @@ class BaseTrainConfig:
     experiment_name: str = "${prefix}${model.name}_${now:%Y-%m-%d_%H-%M-%S}"
     data_dir: str = "${root_dir}/dataset"
     root_dir: str = "${hydra:runtime.cwd}"
-    checkpoint_path: str = "${root_dir}/checkpoints/${experiment_name}.pt"
+    checkpoint_path: str = "${root_dir}/checkpoints/${model.name}.pt"
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimizerConfig = field(default_factory=OptimizerConfig)
     loss_fn: LossFnConfig = field(default_factory=LossFnConfig)

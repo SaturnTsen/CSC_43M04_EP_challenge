@@ -3,27 +3,15 @@ import wandb
 import hydra
 
 from tqdm import tqdm
-from typing import TypedDict, List
-
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from hydra.core.config_store import ConfigStore
 
+from data.datamodule import DataModule, BatchDict
 from configs.experiments.base import BaseTrainConfig
-from configs.experiments.improved import ImprovedTrainConfig
-from data.datamodule import DataModule
+
 from utils.sanity import show_images
-
-class BatchDict(TypedDict):
-    id: List[str]
-    image: torch.Tensor
-    text: List[str]
-    target: torch.Tensor
-
-cs = ConfigStore.instance()
-cs.store(name="base", node=BaseTrainConfig)
-cs.store(name="improved", node=ImprovedTrainConfig)
 
 @hydra.main(config_path="configs", config_name=None, version_base="1.3")
 def train(cfg: BaseTrainConfig) -> None:
@@ -134,4 +122,28 @@ def train(cfg: BaseTrainConfig) -> None:
 
 
 if __name__ == "__main__":
+    import importlib
+    import sys
+    
+    # Get config-name from command line arguments
+    config_name = None
+    for arg in sys.argv:
+        if arg.startswith("--config-name="):
+            config_name = arg.split("=")[1]
+            break
+    
+    if config_name is None:
+        raise ValueError("Please use --config-name to specify the config name")
+    
+    # Dynamically import config class
+    try:
+        config_module = importlib.import_module(f"configs.experiments.{config_name}")
+        config_class = getattr(config_module, f"{config_name.capitalize()}TrainConfig")
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Cannot load config {config_name}: {str(e)}")
+    
+    # Register config
+    cs = ConfigStore.instance()
+    cs.store(name=config_name, node=config_class)
+    
     train()

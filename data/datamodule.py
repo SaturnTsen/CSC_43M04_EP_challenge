@@ -1,10 +1,15 @@
 import torch
 from torch.utils.data import DataLoader, random_split
-from typing import Optional, List, Any
+from typing import Optional, List, Any, TypedDict
 
 from data.dataset import Dataset
 
-
+class BatchDict(TypedDict):
+    id: List[str]
+    image: torch.Tensor
+    text: List[str]
+    target: torch.Tensor
+    
 class DataModule:
     def __init__(
         self,

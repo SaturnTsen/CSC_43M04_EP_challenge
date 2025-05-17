@@ -11,5 +11,5 @@ class DataModuleConfig:
     test_transform: TestTransformConfig = field(default_factory=TestTransformConfig)
     metadata: List[str] = field(default_factory=lambda: ["title"])
     batch_size: int = 128
-    num_workers: int = 16
+    num_workers: int = 64
     seed: int = 42
