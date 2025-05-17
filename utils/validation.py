@@ -64,7 +64,7 @@ def validate_and_log(
             batch: BatchDict = batch
             batch["image"] = batch["image"].to(device)
             
-            # 获取原始目标值（用于计算MSLE）
+            # 获取原始目标值（即标准化后的值）
             original_targets = batch["target"].clone()
             
             # 目标值移动到设备
@@ -81,16 +81,21 @@ def validate_and_log(
             # 转到CPU
             unstandardized_preds = unstandardized_preds.cpu()
             
+            # 将标准化的目标值转换回原始尺度
+            unstandardized_targets = original_targets.squeeze()
+            if target_standardizer:
+                unstandardized_targets = target_standardizer.unstandardize(original_targets)
+            
             # 收集所有预测值和目标值用于计算整体MSLE
             all_preds.append(unstandardized_preds)
-            all_targets.append(original_targets.squeeze())
+            all_targets.append(unstandardized_targets)
             
             # 创建记录
             for idx, id_, pred, target in zip(
                 range(len(unstandardized_preds)), 
                 batch["id"], 
                 unstandardized_preds.numpy(), 
-                original_targets.squeeze().numpy()
+                unstandardized_targets.numpy()
             ):
                 records.append({
                     "ID": id_.item() if isinstance(id_, torch.Tensor) else id_,
