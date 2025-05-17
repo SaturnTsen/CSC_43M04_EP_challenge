@@ -27,3 +27,7 @@ class StandardizedTrainConfig(BaseTrainConfig):
     submission_path: str = "submissions/standardized_submission.csv"
     # 是否记录到wandb
     log: bool = True 
+    # MSLE验证频率（每多少个epoch进行一次MSLE验证，设为0表示不验证）
+    msle_validation_interval: int = 5
+    # MSLE验证结果保存路径 - 使用Hydra的输出目录
+    msle_validation_dir: str = "${hydra:run.dir}/validations" 

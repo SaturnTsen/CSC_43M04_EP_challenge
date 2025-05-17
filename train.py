@@ -4,17 +4,21 @@ warnings.filterwarnings("ignore", message="xFormers is available")
 import torch
 import wandb
 import hydra
+import os
+from pathlib import Path
 
 from tqdm import tqdm
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 
 from data.datamodule import DataModule, BatchDict
 from configs.experiments.base import BaseTrainConfig
-
 from utils.sanity import show_images
+from utils.validation import validate_and_log  # 导入验证函数
+from utils.transforms import TargetStandardizer  # 导入标准化工具
 
 @hydra.main(config_path="configs", config_name=None, version_base="1.3")
 def train(cfg: BaseTrainConfig) -> None:
@@ -34,6 +38,15 @@ def train(cfg: BaseTrainConfig) -> None:
     train_loader : DataLoader = datamodule.train_dataloader()
     val_loader : DataLoader = datamodule.val_dataloader()
     
+    # 确定是否使用标准化
+    target_standardizer = None
+    if hasattr(cfg.datamodule, 'standardize_target') and cfg.datamodule.standardize_target:
+        target_standardizer = TargetStandardizer(
+            mu=cfg.datamodule.target_mu,
+            sigma=cfg.datamodule.target_sigma
+        )
+        print(f"Use target standardization: mu={cfg.datamodule.target_mu}, sigma={cfg.datamodule.target_sigma}")
+    
     train_sanity : wandb.Image = show_images(train_loader, name="assets/sanity/train_images")
     (
         logger.log({"sanity_checks/train_images": wandb.Image(train_sanity)})
@@ -45,6 +58,23 @@ def train(cfg: BaseTrainConfig) -> None:
         logger.log(
             {"sanity_checks/val_images": wandb.Image(val_sanity)}
         ) if logger is not None else None
+
+    # 创建输出目录 - 使用Hydra的工作目录
+    save_dir = cfg.msle_validation_dir
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"MSLE validation results will be saved to: {save_dir}")
+
+    # 获取msle验证频率
+    msle_validation_interval = cfg.msle_validation_interval
+    
+    # 记录训练配置
+    if logger is not None:
+        config_dict = OmegaConf.to_container(cfg, resolve=True)
+        logger.config.update(config_dict)
+        logger.log({
+            "validation/msle_interval": msle_validation_interval,
+            "validation/save_dir": save_dir
+        })
 
     # -- loop over epochs
     for epoch in tqdm(range(cfg.epochs), desc="Epochs"):
@@ -109,6 +139,28 @@ def train(cfg: BaseTrainConfig) -> None:
                 if logger is not None
                 else None
             )
+            
+        # 根据配置的间隔进行MSLE验证
+        if msle_validation_interval > 0 and ((epoch + 1) % msle_validation_interval == 0 or epoch == cfg.epochs - 1):
+            print(f"\nExecuting MSLE validation for epoch {epoch}...")
+            # 运行验证并记录MSLE和预测结果
+            msle, _ = validate_and_log(
+                model=model,
+                val_loader=val_loader,
+                device=device,
+                epoch=epoch,
+                target_standardizer=target_standardizer,
+                experiment_name=cfg.experiment_name,
+                save_dir=save_dir,
+                log_wandb=cfg.log,
+                logger=logger
+            )
+            # 在wandb中记录MSLE (使用统一的命名)
+            if logger is not None:
+                logger.log({
+                    "epoch": epoch,
+                    "validation/msle": msle
+                })
 
     print(
         f"""Epoch {epoch}: 
