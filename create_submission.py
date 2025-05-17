@@ -24,24 +24,25 @@ def create_submission(cfg: BaseTrainConfig):
     
     # - Load model and checkpoint
     model = hydra.utils.instantiate(cfg.model.instance).to(device)
-    checkpoint = torch.load(cfg.checkpoint_path)
+    checkpoint = torch.load(cfg.checkpoint_path, weights_only=True)
     print(f"Loading model from checkpoint: {cfg.checkpoint_path}")
     model.load_state_dict(checkpoint)
     print("Model loaded")
 
-    # - Create submission.csv
-    submission = pd.DataFrame(columns=["ID", "views"])
-
+    # - Create records
+    records = []
     model.eval()
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
             batch["image"] = batch["image"].to(device)
             preds = model(batch).squeeze().cpu().numpy()
-            submission = pd.concat([
-                submission,
-                pd.DataFrame({"ID": batch["id"], "views": preds}),
-            ])
-    submission.to_csv(f"{cfg.root_dir}/submission.csv", index=False)
+        
+            for id_, pred in zip(batch["id"], preds):
+                records.append({"ID": id_.item(), "views": pred})
+
+    # - Create submission.csv
+    submission = pd.DataFrame(records)
+    submission.to_csv(cfg.submission_path, index=False)
 
 
 if __name__ == "__main__":

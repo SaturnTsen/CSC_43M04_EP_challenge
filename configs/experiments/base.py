@@ -15,6 +15,7 @@ class BaseTrainConfig:
     data_dir: str = "${root_dir}/dataset"
     root_dir: str = "${hydra:runtime.cwd}"
     checkpoint_path: str = "${root_dir}/checkpoints/${model.name}.pt"
+    submission_path: str = "${root_dir}/submissions/${model.name}.csv"
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimizerConfig = field(default_factory=OptimizerConfig)
     loss_fn: LossFnConfig = field(default_factory=LossFnConfig)

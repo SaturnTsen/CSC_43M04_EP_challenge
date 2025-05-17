@@ -1,7 +1,8 @@
 # -- custom 
 dataset/*
-submission.csv
+submissions/*
 checkpoints/*.pt
+outputs/*
 *.DS_Store
 *.ipynb_checkpoints
 utils/check_solution.py
