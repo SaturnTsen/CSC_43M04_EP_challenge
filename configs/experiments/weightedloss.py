@@ -20,7 +20,7 @@ class WeightedlossTrainConfig(BaseTrainConfig):
     # 数据模块配置 (使用标准化DataModule)
     datamodule: StandardizedDataModuleConfig = field(default_factory=StandardizedDataModuleConfig)
     # 训练轮数
-    epochs: int = 30
+    epochs: int = 45
     # 保存模型的路径
     checkpoint_path: str = "checkpoints/weighted_loss_model.pt"
     # 提交文件路径
@@ -28,6 +28,6 @@ class WeightedlossTrainConfig(BaseTrainConfig):
     # 是否记录到wandb
     log: bool = True 
     # MSLE验证频率（每多少个epoch进行一次MSLE验证，设为0表示不验证）
-    msle_validation_interval: int = 3
+    msle_validation_interval: int = 2
     # MSLE验证结果保存路径 - 使用Hydra的输出目录
     msle_validation_dir: str = "${hydra:run.dir}/validations" 

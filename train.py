@@ -86,6 +86,7 @@ def train(cfg: BaseTrainConfig) -> None:
         for i, batch in enumerate(pbar):
             batch: BatchDict = batch
             batch["image"] = batch["image"].to(device)
+            # text 字段作为字符串列表保持在 CPU 上，模型会在内部进行 tokenization
             batch["target"] = batch["target"].to(device).squeeze()
             preds = model(batch).squeeze()
             loss = loss_fn(preds, batch["target"])
@@ -103,7 +104,11 @@ def train(cfg: BaseTrainConfig) -> None:
                 current_lambda = loss_fn.step()
                 if logger is not None and hasattr(loss_fn, 'get_current_lambda'):
                     logger.log({"train/current_lambda": loss_fn.get_current_lambda()})
-                    
+            
+            # 记录融合权重（如果模型支持）
+            if hasattr(model, 'get_fusion_weight') and logger is not None:
+                logger.log({"train/fusion_weight": model.get_fusion_weight()})
+            
             epoch_train_loss += loss.detach().cpu().numpy() * len(batch["image"])
             num_samples_train += len(batch["image"])
             pbar.set_postfix({"train/loss_step": loss.detach().cpu().numpy()})
@@ -128,6 +133,7 @@ def train(cfg: BaseTrainConfig) -> None:
             for _, batch in enumerate(val_loader):
                 batch: BatchDict = batch
                 batch["image"] = batch["image"].to(device)
+                # text 字段作为字符串列表保持在 CPU 上
                 batch["target"] = batch["target"].to(device).squeeze()
                 with torch.no_grad():
                     preds = model(batch).squeeze()

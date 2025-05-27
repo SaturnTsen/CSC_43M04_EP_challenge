@@ -90,7 +90,7 @@ class DataModule:
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn if self.standardize_target else None,
+            collate_fn=self.collate_fn,
         )
 
     def val_dataloader(self) -> Optional[DataLoader]:
@@ -103,7 +103,7 @@ class DataModule:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn if self.standardize_target else None,
+            collate_fn=self.collate_fn,
         )
     
     def test_dataloader(self) -> DataLoader:
@@ -119,6 +119,7 @@ class DataModule:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=self.collate_fn,
         )
         
     @property

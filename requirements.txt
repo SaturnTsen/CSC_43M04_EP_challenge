@@ -6,3 +6,4 @@ pre-commit
 black
 flake8
 wandb
+open_clip_torch
