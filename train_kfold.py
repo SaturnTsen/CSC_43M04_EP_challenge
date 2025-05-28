@@ -7,12 +7,11 @@ import hydra
 import os
 import numpy as np
 from pathlib import Path
-from sklearn.model_selection import KFold
 
 from tqdm import tqdm
 from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf
 
@@ -22,55 +21,6 @@ from configs.experiments.base import BaseTrainConfig
 from utils.sanity import show_images
 from utils.validation import validate_and_log
 from utils.transforms import TargetStandardizer
-
-class KFoldDataModule:
-    """支持 K 折交叉验证的数据模块"""
-    
-    def __init__(self, base_datamodule: DataModule, k_folds: int = 5, seed: int = 42):
-        self.base_datamodule = base_datamodule
-        self.k_folds = k_folds
-        self.seed = seed
-        
-        # 获取完整数据集
-        self.full_dataset = base_datamodule.train_val_dataset
-        
-        # 创建 K 折划分
-        self.kfold = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
-        self.fold_splits = list(self.kfold.split(range(len(self.full_dataset))))
-        
-        print(f"创建 {k_folds} 折交叉验证，总数据量: {len(self.full_dataset)}")
-        
-    def get_fold_dataloaders(self, fold_idx: int):
-        """获取指定折的训练和验证数据加载器"""
-        if fold_idx >= self.k_folds:
-            raise ValueError(f"fold_idx {fold_idx} 超出范围 [0, {self.k_folds-1}]")
-            
-        train_indices, val_indices = self.fold_splits[fold_idx]
-        
-        print(f"Fold {fold_idx}: 训练集 {len(train_indices)} 样本, 验证集 {len(val_indices)} 样本")
-        
-        # 创建子集
-        train_subset = Subset(self.full_dataset, train_indices)
-        val_subset = Subset(self.full_dataset, val_indices)
-        
-        # 创建数据加载器
-        train_loader = DataLoader(
-            train_subset,
-            batch_size=self.base_datamodule.batch_size,
-            shuffle=True,
-            num_workers=self.base_datamodule.num_workers,
-            collate_fn=self.base_datamodule.collate_fn,
-        )
-        
-        val_loader = DataLoader(
-            val_subset,
-            batch_size=self.base_datamodule.batch_size,
-            shuffle=False,
-            num_workers=self.base_datamodule.num_workers,
-            collate_fn=self.base_datamodule.collate_fn,
-        )
-        
-        return train_loader, val_loader
 
 def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoader, 
                      val_loader: DataLoader, logger=None) -> dict:
@@ -232,22 +182,17 @@ def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoa
 
 @hydra.main(config_path="configs", config_name=None, version_base="1.3")
 def train_kfold(cfg: BaseTrainConfig) -> None:
-    """K 折交叉验证训练"""
+    """多模型训练 - 使用固定90/10分割，不同随机种子"""
     
-    # 设置 K 折参数
-    k_folds = 2  # 可以通过配置文件设置
+    # 设置训练参数 - 使用90/10分割训练多个模型
+    num_models = 5  # 训练5个模型，每个使用不同随机种子
+    val_split = 0.1  # 10%验证，90%训练
     
     logger = (
-        wandb.init(project="challenge_CSC_43M04_EP", name=f"{cfg.experiment_name}_kfold")
+        wandb.init(project="challenge_CSC_43M04_EP", name=f"{cfg.experiment_name}_multi_seed")
         if cfg.log
         else None
     )
-    
-    # 创建基础数据模块
-    base_datamodule = hydra.utils.instantiate(cfg.datamodule)
-    
-    # 创建 K 折数据模块
-    kfold_datamodule = KFoldDataModule(base_datamodule, k_folds=k_folds, seed=cfg.datamodule.seed)
     
     # 创建输出目录
     save_dir = cfg.msle_validation_dir
@@ -256,87 +201,103 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
     # 记录配置
     if logger is not None:
         config_dict = OmegaConf.to_container(cfg, resolve=True)
-        config_dict['k_folds'] = k_folds
+        config_dict['num_models'] = num_models
+        config_dict['val_split'] = val_split
         logger.config.update(config_dict)
     
-    # 存储所有折的结果
-    all_fold_metrics = []
+    # 存储所有模型的结果
+    all_model_metrics = []
     
-    # 训练每一折
-    for fold_idx in range(k_folds):
+    # 训练每个模型
+    for model_idx in range(num_models):
         print(f"\n{'='*50}")
-        print(f"开始训练 Fold {fold_idx + 1}/{k_folds}")
+        print(f"开始训练模型 {model_idx + 1}/{num_models} (种子: {cfg.datamodule.seed + model_idx})")
         print(f"{'='*50}")
         
-        # 获取当前折的数据加载器
-        train_loader, val_loader = kfold_datamodule.get_fold_dataloaders(fold_idx)
+        # 为每个模型使用不同的随机种子
+        current_seed = cfg.datamodule.seed + model_idx
         
-        # 训练当前折
-        fold_metrics = train_single_fold(
+        # 创建数据模块（使用不同种子）
+        datamodule_config = OmegaConf.to_container(cfg.datamodule, resolve=True)
+        datamodule_config['seed'] = current_seed
+        datamodule_config['val_split'] = val_split  # 确保使用90/10分割
+        base_datamodule = hydra.utils.instantiate(datamodule_config)
+        
+        # 获取训练和验证加载器
+        train_loader = base_datamodule.train_dataloader()
+        val_loader = base_datamodule.val_dataloader()
+        
+        print(f"训练集大小: {len(train_loader.dataset)}")
+        print(f"验证集大小: {len(val_loader.dataset)}")
+        print(f"训练数据比例: {len(train_loader.dataset) / (len(train_loader.dataset) + len(val_loader.dataset)) * 100:.1f}%")
+        
+        # 训练当前模型
+        model_metrics = train_single_fold(
             cfg=cfg,
-            fold_idx=fold_idx,
+            fold_idx=model_idx,
             train_loader=train_loader,
             val_loader=val_loader,
             logger=logger
         )
         
-        all_fold_metrics.append(fold_metrics)
+        all_model_metrics.append(model_metrics)
         
-        print(f"Fold {fold_idx} 完成:")
-        print(f"  最佳验证损失: {fold_metrics['best_val_loss']:.4f}")
-        if fold_metrics['msle_scores']:
-            print(f"  最终 MSLE: {fold_metrics['msle_scores'][-1]:.4f}")
+        print(f"模型 {model_idx} 完成:")
+        print(f"  最佳验证损失: {model_metrics['best_val_loss']:.4f}")
+        if model_metrics['msle_scores']:
+            print(f"  最终 MSLE: {model_metrics['msle_scores'][-1]:.4f}")
     
-    # 计算交叉验证统计
-    final_val_losses = [metrics['val_losses'][-1] for metrics in all_fold_metrics]
+    # 计算多模型统计
+    final_val_losses = [metrics['val_losses'][-1] for metrics in all_model_metrics]
     final_msle_scores = [metrics['msle_scores'][-1] if metrics['msle_scores'] else float('inf') 
-                        for metrics in all_fold_metrics]
+                        for metrics in all_model_metrics]
     
-    cv_val_loss_mean = np.mean(final_val_losses)
-    cv_val_loss_std = np.std(final_val_losses)
-    cv_msle_mean = np.mean([score for score in final_msle_scores if score != float('inf')])
-    cv_msle_std = np.std([score for score in final_msle_scores if score != float('inf')])
+    multi_model_val_loss_mean = np.mean(final_val_losses)
+    multi_model_val_loss_std = np.std(final_val_losses)
+    multi_model_msle_mean = np.mean([score for score in final_msle_scores if score != float('inf')])
+    multi_model_msle_std = np.std([score for score in final_msle_scores if score != float('inf')])
     
     print(f"\n{'='*50}")
-    print(f"交叉验证结果汇总:")
+    print(f"多模型训练结果汇总:")
     print(f"{'='*50}")
-    print(f"验证损失: {cv_val_loss_mean:.4f} ± {cv_val_loss_std:.4f}")
-    print(f"MSLE 分数: {cv_msle_mean:.4f} ± {cv_msle_std:.4f}")
+    print(f"验证损失: {multi_model_val_loss_mean:.4f} ± {multi_model_val_loss_std:.4f}")
+    print(f"MSLE 分数: {multi_model_msle_mean:.4f} ± {multi_model_msle_std:.4f}")
     
-    # 记录交叉验证汇总结果
+    # 记录多模型汇总结果
     if logger is not None:
         logger.log({
-            "cv_summary/val_loss_mean": cv_val_loss_mean,
-            "cv_summary/val_loss_std": cv_val_loss_std,
-            "cv_summary/msle_mean": cv_msle_mean,
-            "cv_summary/msle_std": cv_msle_std,
+            "multi_model_summary/val_loss_mean": multi_model_val_loss_mean,
+            "multi_model_summary/val_loss_std": multi_model_val_loss_std,
+            "multi_model_summary/msle_mean": multi_model_msle_mean,
+            "multi_model_summary/msle_std": multi_model_msle_std,
         })
         
-        # 记录每折的最终结果
-        for i, metrics in enumerate(all_fold_metrics):
+        # 记录每个模型的最终结果
+        for i, metrics in enumerate(all_model_metrics):
             logger.log({
-                f"cv_final/fold_{i}_val_loss": metrics['val_losses'][-1],
-                f"cv_final/fold_{i}_msle": metrics['msle_scores'][-1] if metrics['msle_scores'] else None,
+                f"multi_model_final/model_{i}_val_loss": metrics['val_losses'][-1],
+                f"multi_model_final/model_{i}_msle": metrics['msle_scores'][-1] if metrics['msle_scores'] else None,
             })
     
-    # 保存交叉验证结果
+    # 保存多模型训练结果
     import json
-    cv_results = {
-        'k_folds': k_folds,
-        'cv_val_loss_mean': cv_val_loss_mean,
-        'cv_val_loss_std': cv_val_loss_std,
-        'cv_msle_mean': cv_msle_mean,
-        'cv_msle_std': cv_msle_std,
-        'fold_metrics': all_fold_metrics
+    multi_model_results = {
+        'num_models': num_models,
+        'val_split': val_split,
+        'multi_model_val_loss_mean': multi_model_val_loss_mean,
+        'multi_model_val_loss_std': multi_model_val_loss_std,
+        'multi_model_msle_mean': multi_model_msle_mean,
+        'multi_model_msle_std': multi_model_msle_std,
+        'model_metrics': all_model_metrics
     }
     
-    with open(f"{save_dir}/cv_results.json", 'w') as f:
-        json.dump(cv_results, f, indent=2)
+    with open(f"{save_dir}/multi_model_results.json", 'w') as f:
+        json.dump(multi_model_results, f, indent=2)
     
     if cfg.log:
         logger.finish()
     
-    print(f"\n交叉验证完成！结果已保存到 {save_dir}/cv_results.json")
+    print(f"\n多模型训练完成！结果已保存到 {save_dir}/multi_model_results.json")
 
 if __name__ == "__main__":
     import importlib

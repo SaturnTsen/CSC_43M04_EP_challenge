@@ -47,26 +47,26 @@ def create_ensemble_submission(cfg: BaseTrainConfig):
         )
         print(f"使用目标标准化: mu={cfg.datamodule.target_mu}, sigma={cfg.datamodule.target_sigma}")
     
-    # 查找所有折的模型检查点
-    k_folds = 5  # 与训练时保持一致
+    # 查找所有模型的检查点
+    num_models = 5  # 与训练时保持一致，使用5个模型
     model_checkpoints = []
     
-    for fold_idx in range(k_folds):
+    for model_idx in range(num_models):
         # 优先使用最佳模型，如果不存在则使用最终模型
-        best_checkpoint = f"checkpoints/{cfg.model.name}_fold_{fold_idx}_best.pt"
-        final_checkpoint = f"checkpoints/{cfg.model.name}_fold_{fold_idx}_final.pt"
+        best_checkpoint = f"checkpoints/{cfg.model.name}_fold_{model_idx}_best.pt"  # 保持文件名格式兼容
+        final_checkpoint = f"checkpoints/{cfg.model.name}_fold_{model_idx}_final.pt"
         
         if Path(best_checkpoint).exists():
             model_checkpoints.append(best_checkpoint)
-            print(f"Fold {fold_idx}: 使用最佳模型 {best_checkpoint}")
+            print(f"模型 {model_idx}: 使用最佳模型 {best_checkpoint}")
         elif Path(final_checkpoint).exists():
             model_checkpoints.append(final_checkpoint)
-            print(f"Fold {fold_idx}: 使用最终模型 {final_checkpoint}")
+            print(f"模型 {model_idx}: 使用最终模型 {final_checkpoint}")
         else:
-            print(f"警告: Fold {fold_idx} 的模型文件不存在，跳过")
+            print(f"警告: 模型 {model_idx} 的模型文件不存在，跳过")
     
     if not model_checkpoints:
-        raise FileNotFoundError("没有找到任何模型检查点文件！请先运行 K 折交叉验证训练。")
+        raise FileNotFoundError("没有找到任何模型检查点文件！请先运行多模型训练。")
     
     print(f"找到 {len(model_checkpoints)} 个模型，开始集成预测...")
     
