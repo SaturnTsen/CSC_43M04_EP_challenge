@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import torch
 import numpy as np
+import wandb
 from pathlib import Path
 from typing import List
 from data.dataset import Dataset
@@ -19,6 +20,15 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
     """
     创建ensemble提交文件，支持多个fold模型的集成
     """
+    
+    # 初始化wandb（如果启用）
+    logger = None
+    if hasattr(cfg, 'log') and cfg.log:
+        logger = wandb.init(
+            project="challenge_CSC_43M04_EP",
+            name=f"{cfg.experiment_name}_submission",
+            job_type="ensemble_submission"
+        )
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -51,6 +61,15 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
     for ckpt in checkpoint_files:
         print(f"  - {ckpt.name}")
     
+    # 记录ensemble配置
+    if logger is not None:
+        logger.log({
+            "ensemble/n_models": len(checkpoint_files),
+            "ensemble/checkpoint_type": "best" if use_best else "final",
+            "ensemble/method": cfg.get('ensemble_method', 'mean'),
+            "ensemble/test_samples": len(test_loader.dataset)
+        })
+    
     # 创建标准化转换器
     target_standardizer = None
     if hasattr(cfg.datamodule, 'standardize_target') and cfg.datamodule.standardize_target:
@@ -62,6 +81,7 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
     
     # 存储所有模型的预测
     all_predictions = []
+    model_weights_info = []
     
     # 对每个checkpoint进行预测
     for idx, checkpoint_path in enumerate(checkpoint_files):
@@ -99,6 +119,21 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
                 print(f"  Model weights - Image: {interpretability_info['image_weight']:.3f}, "
                       f"Text: {interpretability_info['text_weight']:.3f}, "
                       f"Age: {interpretability_info['age_weight']:.3f}")
+                
+                model_weights_info.append({
+                    'fold': idx,
+                    'image_weight': interpretability_info['image_weight'],
+                    'text_weight': interpretability_info['text_weight'],
+                    'age_weight': interpretability_info['age_weight']
+                })
+                
+                # 记录到wandb
+                if logger is not None:
+                    logger.log({
+                        f"ensemble/model_{idx}/image_weight": interpretability_info['image_weight'],
+                        f"ensemble/model_{idx}/text_weight": interpretability_info['text_weight'],
+                        f"ensemble/model_{idx}/age_weight": interpretability_info['age_weight']
+                    })
     
     # 将所有预测转换为numpy数组
     all_predictions = np.stack(all_predictions, axis=0)  # Shape: [n_models, n_samples]
@@ -123,15 +158,43 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
         
         final_predictions = np.average(all_predictions, axis=0, weights=weights)
         print(f"\nUsing weighted mean ensemble with weights: {weights}")
+        
+        # 记录权重
+        if logger is not None:
+            for i, w in enumerate(weights):
+                logger.log({f"ensemble/model_{i}_weight": w})
     else:
         raise ValueError(f"Unknown ensemble method: {ensemble_method}")
     
     # 计算预测的统计信息
     pred_std = np.std(all_predictions, axis=0)
+    pred_diversity = np.mean(pred_std)  # 模型间预测的多样性
+    
     print(f"\nPrediction statistics:")
     print(f"  Mean prediction std: {np.mean(pred_std):.4f}")
     print(f"  Max prediction std: {np.max(pred_std):.4f}")
     print(f"  Min prediction std: {np.min(pred_std):.4f}")
+    print(f"  Final prediction range: {np.min(final_predictions):.0f} - {np.max(final_predictions):.0f}")
+    
+    # 记录统计信息到wandb
+    if logger is not None:
+        logger.log({
+            "ensemble/prediction_diversity": pred_diversity,
+            "ensemble/pred_std_mean": np.mean(pred_std),
+            "ensemble/pred_std_max": np.max(pred_std),
+            "ensemble/pred_std_min": np.min(pred_std),
+            "ensemble/final_pred_min": np.min(final_predictions),
+            "ensemble/final_pred_max": np.max(final_predictions),
+            "ensemble/final_pred_mean": np.mean(final_predictions),
+            "ensemble/final_pred_std": np.std(final_predictions)
+        })
+        
+        # 保存权重信息表格
+        if model_weights_info:
+            weights_df = pd.DataFrame(model_weights_info)
+            logger.log({
+                "ensemble/model_weights": wandb.Table(dataframe=weights_df)
+            })
     
     # 创建提交文件
     records = []
@@ -151,7 +214,9 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
         'n_models': len(checkpoint_files),
         'checkpoints': [str(ckpt) for ckpt in checkpoint_files],
         'mean_std': float(np.mean(pred_std)),
-        'weights': weights.tolist() if ensemble_method == 'weighted_mean' else None
+        'prediction_diversity': float(pred_diversity),
+        'weights': weights.tolist() if ensemble_method == 'weighted_mean' else None,
+        'model_weights': model_weights_info
     }
     
     import json
@@ -159,6 +224,14 @@ def create_submission_ensemble(cfg: BaseTrainConfig):
     with open(info_path, 'w') as f:
         json.dump(ensemble_info, f, indent=2)
     print(f"Ensemble info saved to: {info_path}")
+    
+    # 记录提交完成
+    if logger is not None:
+        logger.log({
+            "ensemble/submission_created": True,
+            "ensemble/submission_path": submission_path
+        })
+        logger.finish()
 
 
 if __name__ == "__main__":
