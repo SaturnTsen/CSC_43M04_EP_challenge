@@ -18,7 +18,7 @@ from omegaconf import OmegaConf
 from data.datamodule import DataModule, BatchDict
 from data.dataset import Dataset
 from configs.experiments.base import BaseTrainConfig
-from utils.sanity import show_images
+from utils.sanity import show_images, check_initial_loss
 from utils.validation import validate_and_log
 from utils.transforms import TargetStandardizer
 
@@ -46,9 +46,42 @@ def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoa
     fold_save_dir = f"{cfg.msle_validation_dir}/fold_{fold_idx}"
     os.makedirs(fold_save_dir, exist_ok=True)
     
+    # 🔍 检查初始损失（训练前）
+    print(f"\n🔍 Fold {fold_idx}: 训练前初始损失检查")
+    print("-" * 40)
+    
+    initial_train_loss = check_initial_loss(
+        model=model, 
+        data_loader=train_loader, 
+        loss_fn=loss_fn, 
+        device=device, 
+        name=f"Fold {fold_idx} 训练集"
+    )
+    
+    initial_val_loss = check_initial_loss(
+        model=model, 
+        data_loader=val_loader, 
+        loss_fn=loss_fn, 
+        device=device, 
+        name=f"Fold {fold_idx} 验证集"
+    )
+    
+    # 记录初始损失到wandb
+    if logger is not None:
+        logger.log({
+            f"fold_{fold_idx}/initial_loss/train": initial_train_loss,
+            f"fold_{fold_idx}/initial_loss/val": initial_val_loss,
+            "fold": fold_idx,
+        })
+    
+    print(f"Fold {fold_idx} 初始损失 - 训练: {initial_train_loss:.4f}, 验证: {initial_val_loss:.4f}")
+    print("-" * 40)
+    
     best_val_loss = float('inf')
     fold_metrics = {
         'fold': fold_idx,
+        'initial_train_loss': initial_train_loss,
+        'initial_val_loss': initial_val_loss,
         'train_losses': [],
         'val_losses': [],
         'msle_scores': []

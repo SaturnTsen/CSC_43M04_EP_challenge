@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 
 from data.datamodule import DataModule, BatchDict
 from configs.experiments.base import BaseTrainConfig
-from utils.sanity import show_images
+from utils.sanity import show_images, check_initial_loss
 from utils.validation import validate_and_log  # 导入验证函数
 from utils.transforms import TargetStandardizer  # 导入标准化工具
 
@@ -66,6 +66,43 @@ def train(cfg: BaseTrainConfig) -> None:
 
     # 获取msle验证频率
     msle_validation_interval = cfg.msle_validation_interval
+    
+    # 🔍 检查初始损失（训练前）
+    print("\n" + "="*60)
+    print("🔍 训练前初始损失检查")
+    print("="*60)
+    
+    initial_train_loss = check_initial_loss(
+        model=model, 
+        data_loader=train_loader, 
+        loss_fn=loss_fn, 
+        device=device, 
+        name="训练集"
+    )
+    
+    if val_loader is not None and len(val_loader) > 0:
+        initial_val_loss = check_initial_loss(
+            model=model, 
+            data_loader=val_loader, 
+            loss_fn=loss_fn, 
+            device=device, 
+            name="验证集"
+        )
+    else:
+        initial_val_loss = float('inf')
+        print("⚠️  验证集为空，跳过验证集初始损失检查")
+    
+    # 记录初始损失到wandb
+    if logger is not None:
+        logger.log({
+            "initial_loss/train": initial_train_loss,
+            "initial_loss/val": initial_val_loss,
+        })
+    
+    print(f"\n📊 初始损失总结:")
+    print(f"  训练集: {initial_train_loss:.4f}")
+    print(f"  验证集: {initial_val_loss:.4f}")
+    print("="*60)
     
     # 记录训练配置
     if logger is not None:
