@@ -1,125 +1,133 @@
 import torch
 import torch.nn as nn
-import clip
 from typing import Dict, Any
 import torch.nn.functional as F
+from transformers import CLIPModel, CLIPProcessor
 
 
 class CLIPMultimodalModel(nn.Module):
     """
     多模态CLIP模型，结合图像、文本描述和年龄信息进行视频观看量预测
+    - 使用transformers的CLIP模型
+    - 将age作为额外token嵌入到特征中
     """
     def __init__(
         self, 
-        clip_model: str = "ViT-L/14",  # 使用大型CLIP模型
+        clip_model: str = "openai/clip-vit-large-patch14",  # 使用transformers的CLIP模型
         hidden_dim: int = 512,
         dropout: float = 0.1,
-        freeze_clip: bool = False
+        freeze_clip: bool = True
     ):
         super().__init__()
         
-        # 加载CLIP模型
-        self.clip_model, _ = clip.load(clip_model, device="cuda" if torch.cuda.is_available() else "cpu")
+        # 加载CLIP模型和处理器
+        self.clip = CLIPModel.from_pretrained(clip_model)
+        self.processor = CLIPProcessor.from_pretrained(clip_model)
         
         # 获取CLIP的特征维度
-        self.clip_dim = self.clip_model.visual.output_dim  # 通常是768对于ViT-L/14
+        self.clip_dim = self.clip.config.projection_dim  # 通常是768对于ViT-L/14
         
         # 是否冻结CLIP参数
         if freeze_clip:
-            for param in self.clip_model.parameters():
+            for param in self.clip.parameters():
                 param.requires_grad = False
         
-        # 三个独立的回归头
-        self.image_head = nn.Sequential(
-            nn.Linear(self.clip_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        self.text_head = nn.Sequential(
-            nn.Linear(self.clip_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        # 年龄特征的嵌入层和回归头
+        # 年龄特征的嵌入层
         self.age_embedding = nn.Sequential(
             nn.Linear(1, 64),
             nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU()
+            nn.Linear(64, self.clip_dim),  # 映射到与CLIP特征相同的维度
+            nn.LayerNorm(self.clip_dim)
         )
         
-        self.age_head = nn.Sequential(
-            nn.Linear(128, hidden_dim // 2),
+        # 融合层 - 将图像、文本和年龄特征融合
+        self.fusion = nn.Sequential(
+            nn.Linear(self.clip_dim * 3, hidden_dim),  # 3倍CLIP_dim因为我们concat三个特征
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, 1)
         )
         
-        # 可学习的权重参数
-        self.alpha = nn.Parameter(torch.tensor(0.4))  # 图像权重
-        self.beta = nn.Parameter(torch.tensor(0.4))   # 文本权重
-        # gamma = 1 - alpha - beta (年龄权重)
-        
     def forward(self, batch: Dict[str, Any]) -> torch.Tensor:
         # 提取输入
-        images = batch["image"]
-        texts = batch["text"]
+        images = batch["image"]  # [B, C, H, W]
+        texts = batch["text"]    # [B]
         ages = batch["age_year"].float().unsqueeze(-1)  # [B, 1]
         
-        # 使用CLIP编码图像和文本
-        with torch.cuda.amp.autocast():
-            image_features = self.clip_model.encode_image(images)
-            text_tokens = clip.tokenize(texts, truncate=True).to(images.device)
-            text_features = self.clip_model.encode_text(text_tokens)
+        # 使用CLIP处理图像和文本
+        with torch.amp.autocast():
+            # 获取CLIP特征
+            outputs = self.clip(
+                input_ids=self.processor(
+                    text=texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True
+                ).input_ids.to(images.device),
+                pixel_values=images,
+                return_dict=True
+            )
+            
+            # 提取图像和文本特征
+            image_features = outputs.image_embeds      # [B, clip_dim]
+            text_features = outputs.text_embeds        # [B, clip_dim]
         
-        # 归一化特征
+        # 生成年龄特征
+        age_features = self.age_embedding(ages)        # [B, clip_dim]
+        
+        # 归一化所有特征
         image_features = F.normalize(image_features, dim=-1)
         text_features = F.normalize(text_features, dim=-1)
+        age_features = F.normalize(age_features, dim=-1)
         
-        # 通过各自的回归头
-        image_pred = self.image_head(image_features)
-        text_pred = self.text_head(text_features)
+        # 拼接所有特征
+        combined_features = torch.cat([
+            image_features,
+            text_features,
+            age_features
+        ], dim=1)  # [B, clip_dim * 3]
         
-        # 年龄特征处理
-        age_features = self.age_embedding(ages)
-        age_pred = self.age_head(age_features)
+        # 通过融合层得到最终预测
+        predictions = self.fusion(combined_features)
         
-        # 使用softmax确保权重和为1
-        weights = F.softmax(torch.stack([self.alpha, self.beta, 
-                                         torch.tensor(1.0).to(self.alpha.device) - self.alpha - self.beta]), dim=0)
-        
-        # 加权组合预测
-        final_pred = weights[0] * image_pred + weights[1] * text_pred + weights[2] * age_pred
-        
-        # 保存各个组件的预测和权重用于分析
-        self.last_predictions = {
-            'image': image_pred,
-            'text': text_pred,
-            'age': age_pred,
-            'weights': weights,
-            'final': final_pred
+        # 保存特征用于分析
+        self.last_features = {
+            'image': image_features,
+            'text': text_features,
+            'age': age_features,
+            'combined': combined_features,
+            'predictions': predictions
         }
         
-        return final_pred
+        return predictions
     
-    def get_interpretability_info(self):
-        """获取模型可解释性信息"""
-        if hasattr(self, 'last_predictions'):
-            weights = F.softmax(torch.stack([self.alpha, self.beta, 
-                                            torch.tensor(1.0).to(self.alpha.device) - self.alpha - self.beta]), dim=0)
-            return {
-                'image_weight': weights[0].item(),
-                'text_weight': weights[1].item(),
-                'age_weight': weights[2].item()
-            }
-        return None 
+    def get_feature_similarities(self):
+        """获取不同模态特征之间的相似度，用于分析"""
+        if not hasattr(self, 'last_features'):
+            return None
+            
+        image_text_sim = F.cosine_similarity(
+            self.last_features['image'],
+            self.last_features['text']
+        ).mean().item()
+        
+        image_age_sim = F.cosine_similarity(
+            self.last_features['image'],
+            self.last_features['age']
+        ).mean().item()
+        
+        text_age_sim = F.cosine_similarity(
+            self.last_features['text'],
+            self.last_features['age']
+        ).mean().item()
+        
+        return {
+            'image_text_similarity': image_text_sim,
+            'image_age_similarity': image_age_sim,
+            'text_age_similarity': text_age_sim
+        } 
