@@ -7,7 +7,7 @@ from configs.datamodule.clip import DataModuleConfig, DatasetConfig
 from configs.experiments.base import BaseTrainConfig
 
 @dataclass
-class CLIPMultiModalTrainConfig(BaseTrainConfig):
+class Clip_multimodalTrainConfig(BaseTrainConfig):
     epochs: int = 30
     prefix: str = "clip_"
     model: ModelConfig = field(default_factory=ModelConfig)
