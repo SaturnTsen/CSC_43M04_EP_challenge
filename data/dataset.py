@@ -1,6 +1,7 @@
 import torch
 import pandas as pd
 from PIL import Image
+from datetime import datetime
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -11,15 +12,23 @@ class Dataset(torch.utils.data.Dataset):
         print(f"Reading {dataset_path}/{split}.csv")
         info = pd.read_csv(f"{dataset_path}/{split}.csv")
         info["description"] = info["description"].fillna("")
-        info["meta"] = info[metadata].agg(" + ".join, axis=1)
+        
+        # 计算年份差值
+        current_year = datetime.now().year
+        info["year"] = pd.to_datetime(info["date"]).dt.year
+        info["age_years"] = current_year - info["year"]
+        
+        # 分别存储title和description
+        self.titles = info["title"].values
+        self.descriptions = info["description"].values
+        self.age_years = torch.tensor(info["age_years"].values, dtype=torch.float32)
+        
         if "views" in info.columns:
             self.targets = info["views"].values
 
         # - ids
         self.ids = info["id"].values
-        # - text
-        self.text = info["meta"].values
-
+        
         # - transforms
         self.transforms = transforms
 
@@ -33,11 +42,15 @@ class Dataset(torch.utils.data.Dataset):
         ).convert("RGB")
         if self.transforms is not None:
             image = self.transforms(image)
+            
         value = {
             "id": self.ids[idx],
             "image": image,
-            "text": self.text[idx],
+            "title": self.titles[idx],
+            "description": self.descriptions[idx],
+            "age_years": self.age_years[idx],
         }
+        
         # - don't have the target for test
         if hasattr(self, "targets"):
             value["target"] = torch.tensor(self.targets[idx], dtype=torch.float32)
