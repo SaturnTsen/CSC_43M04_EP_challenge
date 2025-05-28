@@ -45,6 +45,8 @@ class DataModule:
             self.target_standardizer = TargetStandardizer(mu=target_mu, sigma=target_sigma)
         
         # 初始化数据集
+        # 注意：现在数据集内部自动组合title和description为combined_text
+        # metadata参数仅作为向后兼容保留，实际使用combined_text
         self.train_val_dataset = Dataset(
             self.dataset_path,
             "train_val",
@@ -112,6 +114,7 @@ class DataModule:
     
     def test_dataloader(self) -> DataLoader:
         """测试数据加载器"""
+        # 注意：数据集内部自动组合title和description为combined_text
         dataset = Dataset(
             self.dataset_path,
             "test",

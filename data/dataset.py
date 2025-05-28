@@ -13,14 +13,26 @@ class Dataset(torch.utils.data.Dataset):
         print(f"Reading {dataset_path}/{split}.csv")
         info = pd.read_csv(f"{dataset_path}/{split}.csv")
         info["description"] = info["description"].fillna("")
+        
+        # 组合title和description作为完整的文本信息
+        if "title" in info.columns:
+            info["title"] = info["title"].fillna("")
+            # 将title和description组合，用特殊分隔符分开
+            info["combined_text"] = info["title"] + " [SEP] " + info["description"]
+        else:
+            # 如果没有title列，只使用description
+            info["combined_text"] = info["description"]
+        
+        # 保留原有的metadata逻辑作为备用
         info["meta"] = info[metadata].agg(" + ".join, axis=1)
+        
         if "views" in info.columns:
             self.targets = info["views"].values
 
         # - ids
         self.ids = info["id"].values
-        # - text
-        self.text = info["meta"].values
+        # - text: 使用组合的title + description
+        self.text = info["combined_text"].values
         
         # - age_year feature: 计算 2024 - year
         if self.include_age_year and "year" in info.columns:

@@ -19,8 +19,8 @@ class DataModuleConfig:
     train_transform: TrainTransformConfig = field(default_factory=TrainTransformConfig)
     test_transform: TestTransformConfig = field(default_factory=TestTransformConfig)
     metadata: List[str] = field(default_factory=lambda: ["title"])
-    batch_size: int = 128
+    batch_size: int = 1024
     num_workers: int = min(cpu_count(), 64)  # 根据CPU核心数设置，最大64
-    seed: int = 42
+    seed: int = 114514
     val_split: float = 0.1
     standardize_target: bool = False

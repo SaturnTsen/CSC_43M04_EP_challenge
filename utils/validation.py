@@ -64,6 +64,10 @@ def validate_and_log(
             batch: BatchDict = batch
             batch["image"] = batch["image"].to(device)
             
+            # 如果batch中有age_year特征，也移动到设备上
+            if "age_year" in batch:
+                batch["age_year"] = batch["age_year"].to(device)
+            
             # 获取原始目标值（即标准化后的值）
             original_targets = batch["target"].clone()
             

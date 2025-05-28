@@ -63,12 +63,9 @@ class CLIPMultiModalWithAgeRegressorStandardized(nn.Module):
             # 移除 ReLU，允许负值输出
         )
 
-        # 4. 年份回归头 (移除最后的 ReLU)
+        # 4. 年份回归头 (更小更稳定的结构)
         self.age_regressor = nn.Sequential(
-            nn.Linear(1, hidden_dim // 4),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 4, hidden_dim // 8),
+            nn.Linear(1, hidden_dim // 8),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 8, 1),
@@ -76,20 +73,27 @@ class CLIPMultiModalWithAgeRegressorStandardized(nn.Module):
         )
 
         # 5. 可学习的融合权重 (使用 softmax 确保权重总和为1)
-        # 分别对应 图像、文本、年份 的权重
-        self.fusion_weights = nn.Parameter(torch.tensor([1.0, 1.0, 1.0]))  # 初始化为相等权重
+        # 分别对应 图像、文本、年份 的权重，年份权重初始化更小
+        self.fusion_weights = nn.Parameter(torch.tensor([1.0, 1.0, 0.1]))  # 年份权重初始化更小
         
         # 初始化权重
         self._init_weights()
 
     def _init_weights(self):
         """初始化回归头的权重"""
-        for regressor in [self.image_regressor, self.text_regressor, self.age_regressor]:
+        for regressor in [self.image_regressor, self.text_regressor]:
             for m in regressor.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
+        
+        # 年份回归头使用更小的初始化
+        for m in self.age_regressor.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)  # 更小的初始化
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         return self.clip_model.encode_image(image)
