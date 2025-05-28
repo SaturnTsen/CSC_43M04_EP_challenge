@@ -24,3 +24,5 @@ class DataModuleConfig:
     seed: int = 42
     val_split: float = 0.1
     standardize_target: bool = False
+    target_mu: float = 10.50  # log1p(views)的均值
+    target_sigma: float = 2.20  # log1p(views)的标准差

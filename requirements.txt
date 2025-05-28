@@ -6,3 +6,5 @@ pre-commit
 black
 flake8
 wandb
+clip-by-openai
+scikit-learn

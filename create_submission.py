@@ -81,7 +81,11 @@ if __name__ == "__main__":
     # Dynamically import config class
     try:
         config_module = importlib.import_module(f"configs.experiments.{config_name}")
-        config_class = getattr(config_module, f"{config_name.capitalize()}TrainConfig")
+        # Convert config_name to CamelCase for class name
+        # e.g., "clip_multimodal" -> "ClipMultimodal"
+        class_name_parts = config_name.split('_')
+        class_name = ''.join(word.capitalize() for word in class_name_parts) + 'TrainConfig'
+        config_class = getattr(config_module, class_name)
     except (ImportError, AttributeError) as e:
         raise ImportError(f"Cannot load config {config_name}: {str(e)}")
     
