@@ -88,6 +88,11 @@ def train(cfg: BaseTrainConfig) -> None:
             batch["image"] = batch["image"].to(device)
             # text 字段作为字符串列表保持在 CPU 上，模型会在内部进行 tokenization
             batch["target"] = batch["target"].to(device).squeeze()
+            
+            # 如果batch中有age_year特征，也移动到设备上
+            if "age_year" in batch:
+                batch["age_year"] = batch["age_year"].to(device)
+                
             preds = model(batch).squeeze()
             loss = loss_fn(preds, batch["target"])
             (
@@ -106,7 +111,13 @@ def train(cfg: BaseTrainConfig) -> None:
                     logger.log({"train/current_lambda": loss_fn.get_current_lambda()})
             
             # 记录融合权重（如果模型支持）
-            if hasattr(model, 'get_fusion_weight') and logger is not None:
+            if hasattr(model, 'get_fusion_weights') and logger is not None:
+                fusion_weights = model.get_fusion_weights()
+                # 记录所有融合权重
+                for weight_name, weight_value in fusion_weights.items():
+                    logger.log({f"train/{weight_name}": weight_value})
+            elif hasattr(model, 'get_fusion_weight') and logger is not None:
+                # 向后兼容：对于只有两模态的旧模型
                 logger.log({"train/fusion_weight": model.get_fusion_weight()})
             
             epoch_train_loss += loss.detach().cpu().numpy() * len(batch["image"])
@@ -135,6 +146,11 @@ def train(cfg: BaseTrainConfig) -> None:
                 batch["image"] = batch["image"].to(device)
                 # text 字段作为字符串列表保持在 CPU 上
                 batch["target"] = batch["target"].to(device).squeeze()
+                
+                # 如果batch中有age_year特征，也移动到设备上
+                if "age_year" in batch:
+                    batch["age_year"] = batch["age_year"].to(device)
+                    
                 with torch.no_grad():
                     preds = model(batch).squeeze()
                 loss = loss_fn(preds, batch["target"])
