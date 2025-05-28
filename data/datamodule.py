@@ -10,6 +10,7 @@ class BatchDict(TypedDict):
     image: torch.Tensor
     text: List[str]
     target: torch.Tensor
+    age_year: torch.Tensor
     
 class DataModule:
     def __init__(
@@ -25,6 +26,7 @@ class DataModule:
         standardize_target: bool = False,
         target_mu: float = 10.50,
         target_sigma: float = 2.20,
+        include_age_year: bool = False,
     ):
         self.dataset_path = dataset_path
         self.train_transform = train_transform  
@@ -35,6 +37,7 @@ class DataModule:
         self.val_split = val_split
         self.seed = seed
         self.standardize_target = standardize_target
+        self.include_age_year = include_age_year
         
         # 如果启用目标标准化，创建标准化转换器
         self.target_standardizer = None
@@ -47,6 +50,7 @@ class DataModule:
             "train_val",
             transforms=self.train_transform,
             metadata=self.metadata,
+            include_age_year=self.include_age_year,
         )
         
         # 计算训练集和验证集的大小
@@ -74,7 +78,7 @@ class DataModule:
         for key in batch[0].keys():
             if key == "image":
                 result[key] = torch.stack([item[key] for item in batch])
-            elif key == "target":
+            elif key in ["target", "age_year"]:
                 result[key] = torch.tensor([item[key] for item in batch])
             else:
                 result[key] = [item[key] for item in batch]
@@ -113,6 +117,7 @@ class DataModule:
             "test",
             transforms=self.test_transform,
             metadata=self.metadata,
+            include_age_year=self.include_age_year,
         )
         return DataLoader(
             dataset,

@@ -30,6 +30,7 @@ def create_ensemble_submission(cfg: BaseTrainConfig):
             "test",
             transforms=hydra.utils.instantiate(cfg.datamodule.test_transform),
             metadata=cfg.datamodule.metadata,
+            include_age_year=getattr(cfg.datamodule, 'include_age_year', False),  # 添加age_year支持
         ),
         batch_size=cfg.datamodule.batch_size,
         shuffle=False,
@@ -87,6 +88,11 @@ def create_ensemble_submission(cfg: BaseTrainConfig):
     with torch.no_grad():
         for batch in test_loader:
             batch["image"] = batch["image"].to(device)
+            
+            # 如果batch中有age_year特征，也移动到设备上
+            if "age_year" in batch:
+                batch["age_year"] = batch["age_year"].to(device)
+            
             batch_ids = batch["id"]
             
             # 收集所有模型的预测

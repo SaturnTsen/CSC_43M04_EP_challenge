@@ -117,6 +117,10 @@ def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoa
             batch["image"] = batch["image"].to(device)
             batch["target"] = batch["target"].to(device).squeeze()
             
+            # 如果batch中有age_year特征，也移动到设备上
+            if "age_year" in batch:
+                batch["age_year"] = batch["age_year"].to(device)
+            
             preds = model(batch).squeeze()
             loss = loss_fn(preds, batch["target"])
             
@@ -125,7 +129,19 @@ def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoa
             optimizer.step()
             
             # 记录融合权重（如果模型支持）
-            if hasattr(model, 'get_fusion_weight') and logger is not None:
+            if hasattr(model, 'get_fusion_weights') and logger is not None:
+                fusion_weights = model.get_fusion_weights()
+                log_dict = {
+                    f"fold_{fold_idx}/train/loss_step": loss.detach().cpu().numpy(),
+                    "fold": fold_idx,
+                    "epoch": epoch
+                }
+                # 记录所有融合权重
+                for weight_name, weight_value in fusion_weights.items():
+                    log_dict[f"fold_{fold_idx}/train/{weight_name}"] = weight_value
+                logger.log(log_dict)
+            elif hasattr(model, 'get_fusion_weight') and logger is not None:
+                # 向后兼容：对于只有两模态的旧模型
                 logger.log({
                     f"fold_{fold_idx}/train/fusion_weight": model.get_fusion_weight(),
                     f"fold_{fold_idx}/train/loss_step": loss.detach().cpu().numpy(),
@@ -150,6 +166,10 @@ def train_single_fold(cfg: BaseTrainConfig, fold_idx: int, train_loader: DataLoa
                 batch: BatchDict = batch
                 batch["image"] = batch["image"].to(device)
                 batch["target"] = batch["target"].to(device).squeeze()
+                
+                # 如果batch中有age_year特征，也移动到设备上
+                if "age_year" in batch:
+                    batch["age_year"] = batch["age_year"].to(device)
                 
                 preds = model(batch).squeeze()
                 loss = loss_fn(preds, batch["target"])
@@ -215,7 +235,7 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
     """K 折交叉验证训练"""
     
     # 设置 K 折参数
-    k_folds = 5  # 可以通过配置文件设置
+    k_folds = 2  # 可以通过配置文件设置
     
     logger = (
         wandb.init(project="challenge_CSC_43M04_EP", name=f"{cfg.experiment_name}_kfold")

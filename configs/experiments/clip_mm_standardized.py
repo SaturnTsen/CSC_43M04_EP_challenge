@@ -27,7 +27,7 @@ class Clip_mm_standardizedTrainConfig(BaseTrainConfig):
     datamodule: StandardizedDataModuleConfig = field(default_factory=StandardizedDataModuleConfig)
 
     # 训练轮数
-    epochs: int = 25
+    epochs: int = 40
 
     # 检查点 & 提交路径
     checkpoint_path: str = "checkpoints/clip_mm_standardized.pt"
