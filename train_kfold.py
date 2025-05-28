@@ -9,10 +9,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import KFold
-from torch.multiprocessing import spawn
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
+import time
+import random
 
 from tqdm import tqdm
 from torch import nn
@@ -29,47 +27,35 @@ from utils.validation import validate_and_log
 from utils.transforms import TargetStandardizer
 
 
-def setup_ddp(rank, world_size):
-    """设置分布式训练环境"""
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-
-
-def cleanup():
-    """清理分布式训练环境"""
-    dist.destroy_process_group()
-
-
-def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indices: np.ndarray, val_indices: np.ndarray):
-    """训练单个fold"""
-    # 设置分布式训练
-    if world_size > 1:
-        setup_ddp(rank, world_size)
+def train_fold(cfg: BaseTrainConfig, fold_idx: int, train_indices: np.ndarray, val_indices: np.ndarray, use_wandb: bool = True):
+    """训练单个fold - 简化版本，避免DDP复杂性"""
     
-    # 设置设备
-    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    # 设置设备 - 如果有多个GPU，使用不同的GPU
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        device_id = fold_idx % n_gpus  # 轮流使用GPU
+        device = torch.device(f"cuda:{device_id}")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    print(f"Fold {fold_idx}: Using device {device}")
     
     # 创建fold特定的实验名称
     fold_experiment_name = f"{cfg.experiment_name}_fold{fold_idx}"
     
-    # 初始化wandb（只在主进程）
+    # 初始化wandb
     logger = None
-    if rank == 0 and cfg.log:
+    if use_wandb and cfg.log:
         logger = wandb.init(
             project="challenge_CSC_43M04_EP", 
             name=fold_experiment_name,
             group=cfg.experiment_name,
-            job_type=f"fold_{fold_idx}"
+            job_type=f"fold_{fold_idx}",
+            reinit=True  # 允许重新初始化
         )
     
     # 创建模型
     model = hydra.utils.instantiate(cfg.model.instance).to(device)
-    
-    # 如果使用多GPU，包装为DDP
-    if world_size > 1:
-        model = DDP(model, device_ids=[rank])
     
     # 创建优化器和损失函数
     optimizer = hydra.utils.instantiate(cfg.optim, params=model.parameters())
@@ -88,15 +74,11 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
     val_subset = Subset(full_dataset, val_indices)
     
     # 创建数据加载器
-    train_sampler = DistributedSampler(train_subset, num_replicas=world_size, rank=rank) if world_size > 1 else None
-    val_sampler = DistributedSampler(val_subset, num_replicas=world_size, rank=rank) if world_size > 1 else None
-    
     train_loader = DataLoader(
         train_subset,
         batch_size=cfg.datamodule.batch_size,
-        shuffle=(train_sampler is None),
+        shuffle=True,
         num_workers=cfg.datamodule.num_workers,
-        sampler=train_sampler,
         pin_memory=True
     )
     
@@ -105,7 +87,6 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
         batch_size=cfg.datamodule.batch_size,
         shuffle=False,
         num_workers=cfg.datamodule.num_workers,
-        sampler=val_sampler,
         pin_memory=True
     )
     
@@ -116,20 +97,18 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
             mu=cfg.datamodule.target_mu,
             sigma=cfg.datamodule.target_sigma
         )
-        if rank == 0:
-            print(f"Fold {fold_idx}: Using target standardization")
+        print(f"Fold {fold_idx}: Using target standardization")
     
     # 创建保存目录
     save_dir = os.path.join(cfg.msle_validation_dir, f"fold_{fold_idx}")
     os.makedirs(save_dir, exist_ok=True)
     
-    # 记录配置（只在主进程）
-    if rank == 0 and logger is not None:
+    # 记录配置
+    if logger is not None:
         config_dict = OmegaConf.to_container(cfg, resolve=True)
         config_dict['fold'] = fold_idx
         config_dict['train_size'] = len(train_indices)
         config_dict['val_size'] = len(val_indices)
-        config_dict['world_size'] = world_size
         config_dict['device'] = str(device)
         logger.config.update(config_dict)
         
@@ -143,23 +122,19 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
             f"fold_{fold_idx}/model/frozen_params": total_params - trainable_params,
             f"fold_{fold_idx}/data/train_size": len(train_indices),
             f"fold_{fold_idx}/data/val_size": len(val_indices),
-            f"fold_{fold_idx}/setup/world_size": world_size,
             f"fold_{fold_idx}/setup/device": str(device)
         })
     
     # 训练循环
     best_val_loss = float('inf')
-    for epoch in tqdm(range(cfg.epochs), desc=f"Fold {fold_idx} Epochs", disable=(rank != 0)):
-        # 设置epoch（对于DistributedSampler）
-        if train_sampler is not None:
-            train_sampler.set_epoch(epoch)
+    for epoch in tqdm(range(cfg.epochs), desc=f"Fold {fold_idx} Epochs"):
         
         # 训练阶段
         model.train()
         epoch_train_loss = 0
         num_samples_train = 0
         
-        pbar = tqdm(train_loader, desc=f"Fold {fold_idx} Epoch {epoch}", leave=False, disable=(rank != 0))
+        pbar = tqdm(train_loader, desc=f"Fold {fold_idx} Epoch {epoch}", leave=False)
         for i, batch in enumerate(pbar):
             batch: BatchDict = batch
             batch["image"] = batch["image"].to(device)
@@ -175,14 +150,13 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
             epoch_train_loss += loss.detach().cpu().numpy() * len(batch["image"])
             num_samples_train += len(batch["image"])
             
-            if rank == 0:
-                pbar.set_postfix({"train/loss_step": loss.detach().cpu().numpy()})
-                if logger is not None and i % 10 == 0:
-                    logger.log({
-                        f"fold_{fold_idx}/train/loss_step": loss.detach().cpu().numpy(),
-                        "epoch": epoch,
-                        "step": epoch * len(train_loader) + i
-                    })
+            pbar.set_postfix({"train/loss_step": loss.detach().cpu().numpy()})
+            if logger is not None and i % 10 == 0:
+                logger.log({
+                    f"fold_{fold_idx}/train/loss_step": loss.detach().cpu().numpy(),
+                    "epoch": epoch,
+                    "step": epoch * len(train_loader) + i
+                })
         
         epoch_train_loss /= num_samples_train
         
@@ -211,17 +185,7 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
         epoch_val_loss /= num_samples_val
         
         # 记录权重信息（如果模型支持）
-        if rank == 0 and hasattr(model, 'module') and hasattr(model.module, 'get_interpretability_info'):
-            interpretability_info = model.module.get_interpretability_info()
-            if interpretability_info and logger is not None:
-                logger.log({
-                    f"fold_{fold_idx}/weights/image": interpretability_info['image_weight'],
-                    f"fold_{fold_idx}/weights/text": interpretability_info['text_weight'],
-                    f"fold_{fold_idx}/weights/age": interpretability_info['age_weight'],
-                    "epoch": epoch
-                })
-        elif rank == 0 and hasattr(model, 'get_interpretability_info'):
-            # 单GPU情况
+        if hasattr(model, 'get_interpretability_info'):
             interpretability_info = model.get_interpretability_info()
             if interpretability_info and logger is not None:
                 logger.log({
@@ -231,100 +195,94 @@ def train_fold(rank, world_size, cfg: BaseTrainConfig, fold_idx: int, train_indi
                     "epoch": epoch
                 })
         
-        # 计算MSLE
-        if rank == 0:
-            all_preds = np.array(all_preds)
-            all_targets = np.array(all_targets)
-            
-            # 如果使用了标准化，先反标准化
-            if target_standardizer:
-                all_preds_orig = target_standardizer.unstandardize(torch.tensor(all_preds)).numpy()
-                all_targets_orig = target_standardizer.unstandardize(torch.tensor(all_targets)).numpy()
-            else:
-                all_preds_orig = all_preds
-                all_targets_orig = all_targets
-            
-            # 计算MSLE
-            msle = np.mean((np.log1p(all_preds_orig) - np.log1p(all_targets_orig)) ** 2)
-            
-            # 计算额外的指标
-            mae = np.mean(np.abs(all_preds_orig - all_targets_orig))
-            mse = np.mean((all_preds_orig - all_targets_orig) ** 2)
-            rmse = np.sqrt(mse)
-            
-            # 计算预测值的统计信息
-            pred_mean = np.mean(all_preds_orig)
-            pred_std = np.std(all_preds_orig)
-            target_mean = np.mean(all_targets_orig)
-            target_std = np.std(all_targets_orig)
-            
-            if logger is not None:
-                logger.log({
-                    f"fold_{fold_idx}/epoch": epoch,
-                    f"fold_{fold_idx}/train/loss_epoch": epoch_train_loss,
-                    f"fold_{fold_idx}/val/loss_epoch": epoch_val_loss,
-                    f"fold_{fold_idx}/val/msle": msle,
-                    f"fold_{fold_idx}/val/mae": mae,
-                    f"fold_{fold_idx}/val/mse": mse,
-                    f"fold_{fold_idx}/val/rmse": rmse,
-                    f"fold_{fold_idx}/predictions/mean": pred_mean,
-                    f"fold_{fold_idx}/predictions/std": pred_std,
-                    f"fold_{fold_idx}/targets/mean": target_mean,
-                    f"fold_{fold_idx}/targets/std": target_std,
-                    f"fold_{fold_idx}/learning_rate": optimizer.param_groups[0]['lr']
-                })
-            
-            print(f"Fold {fold_idx} Epoch {epoch}: Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, MSLE: {msle:.4f}, MAE: {mae:.0f}")
-            
-            # 保存最佳模型
-            if epoch_val_loss < best_val_loss:
-                best_val_loss = epoch_val_loss
-                checkpoint_path = cfg.checkpoint_path.replace('.pt', f'_fold{fold_idx}_best.pt')
-                torch.save(model.state_dict() if not isinstance(model, DDP) else model.module.state_dict(), 
-                          checkpoint_path)
-                
-                # 记录最佳模型的指标
-                if logger is not None:
-                    logger.log({
-                        f"fold_{fold_idx}/best_epoch": epoch,
-                        f"fold_{fold_idx}/best_val_loss": best_val_loss,
-                        f"fold_{fold_idx}/best_msle": msle
-                    })
-    
-    # 保存最终模型
-    if rank == 0:
-        final_checkpoint_path = cfg.checkpoint_path.replace('.pt', f'_fold{fold_idx}_final.pt')
-        torch.save(model.state_dict() if not isinstance(model, DDP) else model.module.state_dict(), 
-                  final_checkpoint_path)
+        # 计算MSLE和其他指标
+        all_preds = np.array(all_preds)
+        all_targets = np.array(all_targets)
         
-        # 记录训练完成信息
+        # 如果使用了标准化，先反标准化
+        if target_standardizer:
+            all_preds_orig = target_standardizer.unstandardize(torch.tensor(all_preds)).numpy()
+            all_targets_orig = target_standardizer.unstandardize(torch.tensor(all_targets)).numpy()
+        else:
+            all_preds_orig = all_preds
+            all_targets_orig = all_targets
+        
+        # 计算MSLE
+        msle = np.mean((np.log1p(all_preds_orig) - np.log1p(all_targets_orig)) ** 2)
+        
+        # 计算额外的指标
+        mae = np.mean(np.abs(all_preds_orig - all_targets_orig))
+        mse = np.mean((all_preds_orig - all_targets_orig) ** 2)
+        rmse = np.sqrt(mse)
+        
+        # 计算预测值的统计信息
+        pred_mean = np.mean(all_preds_orig)
+        pred_std = np.std(all_preds_orig)
+        target_mean = np.mean(all_targets_orig)
+        target_std = np.std(all_targets_orig)
+        
         if logger is not None:
             logger.log({
-                f"fold_{fold_idx}/training_completed": True,
-                f"fold_{fold_idx}/final_best_val_loss": best_val_loss,
-                f"fold_{fold_idx}/total_epochs": cfg.epochs
+                f"fold_{fold_idx}/epoch": epoch,
+                f"fold_{fold_idx}/train/loss_epoch": epoch_train_loss,
+                f"fold_{fold_idx}/val/loss_epoch": epoch_val_loss,
+                f"fold_{fold_idx}/val/msle": msle,
+                f"fold_{fold_idx}/val/mae": mae,
+                f"fold_{fold_idx}/val/mse": mse,
+                f"fold_{fold_idx}/val/rmse": rmse,
+                f"fold_{fold_idx}/predictions/mean": pred_mean,
+                f"fold_{fold_idx}/predictions/std": pred_std,
+                f"fold_{fold_idx}/targets/mean": target_mean,
+                f"fold_{fold_idx}/targets/std": target_std,
+                f"fold_{fold_idx}/learning_rate": optimizer.param_groups[0]['lr']
             })
+        
+        print(f"Fold {fold_idx} Epoch {epoch}: Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, MSLE: {msle:.4f}, MAE: {mae:.0f}")
+        
+        # 保存最佳模型
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            checkpoint_path = cfg.checkpoint_path.replace('.pt', f'_fold{fold_idx}_best.pt')
+            torch.save(model.state_dict(), checkpoint_path)
             
-            # 创建训练总结
-            logger.summary[f"fold_{fold_idx}/best_val_loss"] = best_val_loss
-            logger.summary[f"fold_{fold_idx}/total_params"] = sum(p.numel() for p in model.parameters())
-            logger.summary[f"fold_{fold_idx}/trainable_params"] = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            
-        if logger is not None:
-            logger.finish()
+            # 记录最佳模型的指标
+            if logger is not None:
+                logger.log({
+                    f"fold_{fold_idx}/best_epoch": epoch,
+                    f"fold_{fold_idx}/best_val_loss": best_val_loss,
+                    f"fold_{fold_idx}/best_msle": msle
+                })
     
-    # 清理
-    if world_size > 1:
-        cleanup()
+    # 保存最终模型
+    final_checkpoint_path = cfg.checkpoint_path.replace('.pt', f'_fold{fold_idx}_final.pt')
+    torch.save(model.state_dict(), final_checkpoint_path)
+    
+    # 记录训练完成信息
+    if logger is not None:
+        logger.log({
+            f"fold_{fold_idx}/training_completed": True,
+            f"fold_{fold_idx}/final_best_val_loss": best_val_loss,
+            f"fold_{fold_idx}/total_epochs": cfg.epochs
+        })
+        
+        # 创建训练总结
+        logger.summary[f"fold_{fold_idx}/best_val_loss"] = best_val_loss
+        logger.summary[f"fold_{fold_idx}/total_params"] = sum(p.numel() for p in model.parameters())
+        logger.summary[f"fold_{fold_idx}/trainable_params"] = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        logger.finish()
+    
+    return best_val_loss, msle
 
 
 @hydra.main(config_path="configs", config_name=None, version_base="1.3")
 def train_kfold(cfg: BaseTrainConfig) -> None:
-    """主函数：执行3-fold交叉验证训练"""
+    """主函数：执行3-fold交叉验证训练 - 顺序执行避免并行问题"""
     
     # 设置随机种子
     torch.manual_seed(42)
     np.random.seed(42)
+    random.seed(42)
     
     # 读取数据以获取索引
     info = pd.read_csv(f"{cfg.datamodule.dataset_path}/train_val.csv")
@@ -336,11 +294,11 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
     
     # 确定可用的GPU数量
     n_gpus = torch.cuda.device_count()
-    world_size = min(n_gpus, 3)  # 最多使用3个GPU
     
     print(f"Starting 3-fold cross-validation training")
     print(f"Total samples: {n_samples}")
-    print(f"Using {world_size} GPU(s)")
+    print(f"Available GPUs: {n_gpus}")
+    print("Using sequential training to avoid DDP complexity")
     
     # 创建主实验的wandb记录（用于记录ensemble信息）
     main_logger = None
@@ -356,8 +314,8 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
         config_dict.update({
             'total_samples': n_samples,
             'n_folds': 3,
-            'world_size': world_size,
-            'n_gpus': n_gpus
+            'n_gpus': n_gpus,
+            'training_mode': 'sequential'
         })
         main_logger.config.update(config_dict)
         
@@ -365,16 +323,19 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
             "ensemble/total_samples": n_samples,
             "ensemble/n_folds": 3,
             "ensemble/n_gpus": n_gpus,
-            "ensemble/world_size": world_size
+            "ensemble/training_mode": "sequential"
         })
     
-    # 保存fold信息
+    # 保存fold信息和结果
     fold_info = []
+    fold_results = []
     
-    # 训练每个fold
+    # 顺序训练每个fold
     for fold_idx, (train_indices, val_indices) in enumerate(kf.split(indices)):
-        print(f"\nTraining Fold {fold_idx + 1}/3")
+        print(f"\n{'='*50}")
+        print(f"Training Fold {fold_idx + 1}/3")
         print(f"Train size: {len(train_indices)}, Val size: {len(val_indices)}")
+        print(f"{'='*50}")
         
         fold_info.append({
             'fold': fold_idx,
@@ -390,38 +351,69 @@ def train_kfold(cfg: BaseTrainConfig) -> None:
                 f"ensemble/fold_{fold_idx}_val_size": len(val_indices)
             })
         
-        if world_size > 1 and fold_idx < world_size:
-            # 并行训练（如果有多个GPU）
-            spawn(train_fold, 
-                  args=(world_size, cfg, fold_idx, train_indices, val_indices),
-                  nprocs=1,  # 每次只启动一个进程
-                  join=True)
-        else:
-            # 单GPU训练
-            train_fold(0, 1, cfg, fold_idx, train_indices, val_indices)
+        # 训练当前fold
+        start_time = time.time()
+        best_val_loss, best_msle = train_fold(cfg, fold_idx, train_indices, val_indices, use_wandb=True)
+        end_time = time.time()
+        
+        fold_results.append({
+            'fold': fold_idx,
+            'best_val_loss': best_val_loss,
+            'best_msle': best_msle,
+            'training_time': end_time - start_time
+        })
         
         # 记录fold完成
         if main_logger is not None:
             main_logger.log({
-                f"ensemble/fold_{fold_idx}_completed": True
+                f"ensemble/fold_{fold_idx}_completed": True,
+                f"ensemble/fold_{fold_idx}_best_val_loss": best_val_loss,
+                f"ensemble/fold_{fold_idx}_best_msle": best_msle,
+                f"ensemble/fold_{fold_idx}_training_time": end_time - start_time
             })
+        
+        print(f"Fold {fold_idx} completed in {end_time - start_time:.1f}s")
+        print(f"Best Val Loss: {best_val_loss:.4f}, Best MSLE: {best_msle:.4f}")
+        
+        # 清理GPU内存
+        torch.cuda.empty_cache()
     
-    print("\nAll folds training completed!")
+    print(f"\n{'='*50}")
+    print("All folds training completed!")
+    print(f"{'='*50}")
     
     # 保存fold信息
     fold_df = pd.DataFrame(fold_info)
     fold_df.to_csv(os.path.join(cfg.root_dir, 'fold_info.csv'), index=False)
     
+    # 保存fold结果
+    results_df = pd.DataFrame(fold_results)
+    results_df.to_csv(os.path.join(cfg.root_dir, 'fold_results.csv'), index=False)
+    
+    # 计算平均性能
+    avg_val_loss = np.mean([r['best_val_loss'] for r in fold_results])
+    avg_msle = np.mean([r['best_msle'] for r in fold_results])
+    total_time = sum([r['training_time'] for r in fold_results])
+    
+    print(f"\nCross-validation Results:")
+    print(f"Average Val Loss: {avg_val_loss:.4f} ± {np.std([r['best_val_loss'] for r in fold_results]):.4f}")
+    print(f"Average MSLE: {avg_msle:.4f} ± {np.std([r['best_msle'] for r in fold_results]):.4f}")
+    print(f"Total Training Time: {total_time:.1f}s ({total_time/60:.1f}min)")
+    
     # 完成主实验记录
     if main_logger is not None:
         main_logger.log({
             "ensemble/all_folds_completed": True,
-            "ensemble/ready_for_ensemble": True
+            "ensemble/ready_for_ensemble": True,
+            "ensemble/avg_val_loss": avg_val_loss,
+            "ensemble/avg_msle": avg_msle,
+            "ensemble/total_training_time": total_time
         })
         
         # 保存fold信息到wandb
         main_logger.log({
-            "ensemble/fold_info": wandb.Table(dataframe=fold_df)
+            "ensemble/fold_info": wandb.Table(dataframe=fold_df),
+            "ensemble/fold_results": wandb.Table(dataframe=results_df)
         })
         
         main_logger.finish()
